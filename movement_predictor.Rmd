@@ -1,0 +1,200 @@
+---
+title: "Practical Machine Learning - Movement Predictor"
+author: "Eliezer Mitrani"
+output: html_document
+---
+
+``` {r, echo=FALSE}
+knitr::opts_chunk$set(comment=NA, warning=FALSE, cache=TRUE, echo=FALSE)
+```
+
+```{r, echo=FALSE, comment=NA, warning=FALSE}
+library(ggplot2)
+library(caret)
+library(randomForest)
+library(rpart) 
+library(rattle)
+library(RColorBrewer)
+library(corrplot)
+library(party)
+```
+
+## Summary
+
+In this project we will construct a prediction machine, to predict the type of movement of a person according to the "Human Activity Recognition" dataset.
+
+IMPORTANT NOTE: Some of the code will be hidden to guarantee the fluency of the lecture. You will find the complete code in the RMD file in the GitHub repository.
+
+## Data Analysis
+
+To archive our objective we will use the `Human Activity Recognition (HAR)` dataset. The (HAR) aims to identify the actions carried out by a person given a set of observations of him/herself and the surrounding environment.
+
+### Loading the data
+
+We will work with the pre-split dataset. Both, train and test, dataset can be found in:
+Train: https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv
+Test: https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv
+
+The datasets has a lot of DIV, NA and null variables. All this values has been interpreted as NA values. Also, we will set our seed as 2000.
+
+```{r, echo=TRUE,comment=NA, warning=FALSE,}
+
+set.seed(2000)
+
+subDir = "data" #This is only for the raw data file.
+ifelse(!dir.exists(file.path("./", subDir)), dir.create(file.path("./", subDir)), FALSE) #this checks and create the data folder
+
+# download file from server
+ifelse(!file.exists("./data/pml-training.csv"),
+       download.file(url = "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv",
+                     destfile = "./data/pml-training.csv",
+                     method = "libcurl"),FALSE)
+ifelse(!file.exists("./data/pml-testing.csv"),
+       download.file(url = "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv",
+                     destfile = "./data/pml-testing.csv",
+                     method = "libcurl"),FALSE)
+
+train <- read.csv(file="./data/pml-training.csv", header=TRUE, na.strings=c("NA","#DIV/0!", ""))
+test <- read.csv(file="./data/pml-testing.csv", header=TRUE, na.strings=c("NA","#DIV/0!", ""))
+```
+
+The train set has `r dim(train)[1]` rows and `r dim(train)[2]` columns. The test set has `r dim(test)[1]` rows and `r dim(test)[2]` columns. But, many of this variables are NA values or irrelevant to the model. Let's omit this variables 
+
+
+```{r, echo=TRUE}
+# Delete columns with all missing values
+trainingset<-train[,colSums(is.na(train)) == 0]
+testingset <-test[,colSums(is.na(test)) == 0]
+
+# Some variables are irrelevant to our current project: user_name, raw_timestamp_part_1, raw_timestamp_part_,2 cvtd_timestamp, new_window, and  num_window (columns 1 to 7). We can delete these variables.
+trainingset   <-trainingset[,-c(1:7)]
+testingset <-testingset[,-c(1:7)]
+```
+
+### Creating our Train and Test set
+
+Our data comes with a "preset" train and test set. We will split our original train set in a new train and test set. And with the original test set we will be used as a out of the bag QUIZ set.
+
+```{r, echo=TRUE}
+set.seed(2000)
+
+inTrain <- createDataPartition(y=trainingset$classe, p=0.75, list=FALSE)
+subTrain <- trainingset[inTrain,] 
+subTest <- trainingset[-inTrain, ]
+quizTest <- testingset
+
+```
+
+### Analyzing the Data
+
+### Correlation:
+
+As we can see, some of the variables has a strong correlation between. For example, there are some correlation berween the acceleration and the gyroscope variables. Maybe, we should try to use principal component analysis (PCA) to transform the data to a smaller sub-space where the new variable are uncorrelated with one another. 
+
+```{r, echo=TRUE}
+M <- cor(subTrain[,(1:26)])
+M2 <- cor(subTrain[,(27:52)])
+par.before <- par()
+par(mfrow=c(1,2), cex = 0.5)
+corrplot.mixed(M, tl.pos="lt", tl.cex = 0.7, cl.cex = 0.7, addCoefasPercent = TRUE)
+corrplot.mixed(M2, tl.pos="lt", tl.cex = 0.7, cl.cex = 0.7, addCoefasPercent = TRUE)
+par(cex = par.before)
+dev.off()
+```
+
+## Building our Model
+
+### 1. Tree model
+
+Let's start with a simple basal model. We will try to construct a simple tree using rpart including all the variables.
+
+```{r, echo=TRUE}
+tree1 <- train (classe~., method="rpart", data=subTrain)
+print(tree1$finalModel)
+fancyRpartPlot(tree1$finalModel,cex=0.7)
+```
+
+As we an see, the roll belt is the most important variable to predict throwing the hips to the front (Class E), which makes sense. But our tree does not predict the class D (lowering the dumbbell only halfway). Let's see the prediction capability of our model with the train and test data set.
+
+```{r, echo=TRUE}
+confusionMatrix(subTrain$classe, predict(tree1, newdata = subTrain))
+confusionMatrix(subTest$classe, predict(tree1, newdata = subTest))
+```
+
+The two confusion matrices show a misinterpretation of the classes. In fact the accuracy is around 50% and the Kappa value around the 0.34. With this numbers, tossing a coin will predict better which kind of exercise is performing the subject.
+
+### 2. Random forest model
+
+Our basal tree was very poor, but it's a starting point. Let get the model further. We will start with a simple Random Forest model
+
+```{r, echo=TRUE}
+tree2 <- randomForest(classe ~., data=subTrain, type="class")
+plot(tree2)
+```
+
+500 decision trees or a forest has been built using the Random Forest algorithm based learning. We can plot the error rate across decision trees. The plot seems to indicate that after 100 decision trees, there is not a significant reduction in error rate.
+
+```{r, echo=TRUE}
+# Variable Importance Plot
+varImpPlot(tree2,
+           sort = T,
+           main="Variable Importance",
+           n.var=50)
+```
+
+Variable importance plot is also a useful tool and can be plotted using varImpPlot function. Top 5 variables are selected and plotted based on Gini value.
+
+Now, we want to measure the accuracy of the Random Forest model. Some of the other model performance statistics are Kappa, Sensitivity, Specificity, etc.
+
+```{r, echo=TRUE}
+# Confussion matrix with the Train data
+confusionMatrix(subTrain$classe, predict(tree2, newdata = subTrain))
+
+# Confussion matrix with the Test data
+confusionMatrix(subTest$classe, predict(tree2, newdata = subTest))
+```
+
+Our test confussion matrix has an accuracy of 99.53%, which is fantastic. Wait, too perfect, also the train data has a accuracy of 100%, that is suspicious. Did you remember the high correlation between some variables?, well, let's try to remove roll belt, yaw_belt and total_accel_belt variable (the most important variables and the most correlated).
+
+```{r, echo=TRUE}
+tree3 <- randomForest(classe ~. -roll_belt -yaw_belt -total_accel_belt, data=subTrain, type="class")
+plot(tree3)
+varImpPlot(tree3,
+           sort = T,
+           main="Variable Importance",
+           n.var=50)
+confusionMatrix(subTest$classe, predict(tree3, newdata = subTest))
+```
+
+As we can see, anything changes. The accuracy is still high.
+
+## Conclussion
+
+As expected, Random Forest algorithm performed better than Decision Trees.
+Accuracy for Random Forest model was 0.9931 (95% CI: (0.9903, 0.9952)) compared to 0.4998 (95% CI: (0.4857, 0.5139)) for Decision Tree model.
+
+## Generating the Quiz Submission
+```{r, echo=TRUE}
+predictfinal <- predict(tree3, quizTest, type="class")
+table(predictfinal)
+
+# Write files for submission
+pml_write_files = function(x){
+  n = length(x)
+  for(i in 1:n){
+    filename = paste0("problem_id_",i,".txt")
+    write.table(x[i],file=filename,quote=FALSE,row.names=FALSE,col.names=FALSE)
+  }
+}
+
+pml_write_files(predictfinal)
+```
+
+## References
+
+Velloso, E.; Bulling, A.; Gellersen, H.; Ugulino, W.; Fuks, H. Qualitative Activity Recognition of Weight Lifting Exercises. Proceedings of 4th International Conference in Cooperation with SIGCHI (Augmented Human '13) . Stuttgart, Germany: ACM SIGCHI, 2013.
+Read more: http://groupware.les.inf.puc-rio.br/har#ixzz3vXuQBr7x
+
+ESANN 2013 proceedings, European Symposium on Artificial Neural Networks, Computational  Intelligence 
+and Machine Learning.  Bruges (Belgium), 24-26 April 2013, i6doc.com publ., ISBN 978-2-87419-081-0. 
+Available from http://www.i6doc.com/en/livre/?GCOI=280011001310
